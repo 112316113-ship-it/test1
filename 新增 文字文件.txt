@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="utf-8" />
+    <title>FHIR Claim Builder (R4)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+        body {
+            font-family: system-ui,"Microsoft JhengHei";
+            background: #f6f7fb;
+            padding: 20px;
+        }
+
+        .card {
+            background: #fff;
+            padding: 20px;
+            border-radius: 14px;
+            max-width: 900px;
+            margin: auto;
+            box-shadow: 0 8px 24px rgba(0,0,0,.06);
+        }
+
+        label {
+            font-weight: 700;
+            margin-top: 12px;
+            display: block;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 10px;
+            margin-top: 6px;
+            border-radius: 10px;
+            border: 1px solid #cfd5e6;
+        }
+
+        .row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        button {
+            padding: 10px 14px;
+            border-radius: 10px;
+            border: 0;
+            cursor: pointer;
+            font-weight: 700;
+        }
+
+        .primary {
+            background: #3b82f6;
+            color: #fff;
+        }
+
+        .item {
+            background: #f9fbff;
+            border: 1px solid #e5e9f6;
+            padding: 12px;
+            border-radius: 12px;
+            margin-top: 10px;
+        }
+
+        pre {
+            background: #0b1020;
+            color: #e8ecff;
+            padding: 12px;
+            border-radius: 12px;
+            overflow: auto;
+        }
+
+        .hint {
+            font-size: 13px;
+            color: #555;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="card">
+        <h1>FHIR Claim Builder（R4）</h1>
+        <p class="hint">填寫後可產生 Claim JSON，並送到 HAPI FHIR Server</p>
+
+        <div class="row">
+            <div>
+                <label>status（建議 draft）</label>
+                <select id="status">
+                    <option value="draft" selected>draft</option>
+                </select>
+            </div>
+            <div>
+                <label>use</label>
+                <select id="use">
+                    <option value="claim">claim</option>
+                    <option value="preauthorization">preauthorization</option>
+                </select>
+            </div>
+        </div>
+
+        <label>created</label>
+        <input id="created" type="date">
+
+        <label>patient Reference</label>
+        <input id="patient" value="Patient/951">
+
+        <label>provider Reference</label>
+        <input id="provider" value="Practitioner/753">
+
+        <label>insurer Reference</label>
+        <input id="insurer" value="Organization/477">
+
+        <h2>Item</h2>
+        <div class="item">
+            <label>Service Code (CPT)</label>
+            <input id="cpt" value="99213">
+
+            <div class="row">
+                <div>
+                    <label>unitPrice</label>
+                    <input id="price" type="number" value="150">
+                </div>
+                <div>
+                    <label>quantity</label>
+                    <input id="qty" type="number" value="1">
+                </div>
+            </div>
+        </div>
+
+        <br>
+        <button class="primary" onclick="buildAndSend()">產生並送出 Claim</button>
+
+        <h2>Claim JSON</h2>
+        <pre id="output">{}</pre>
+    </div>
+
+    <script>
+        document.getElementById("created").value =
+            new Date().toISOString().slice(0, 10);
+
+        function buildAndSend() {
+            const price = Number(document.getElementById("price").value);
+            const qty = Number(document.getElementById("qty").value);
+
+            const claim = {
+                resourceType: "Claim",
+                status: "draft",
+                use: "claim",
+                type: {
+                    coding: [{ system: "http://terminology.hl7.org/CodeSystem/claim-type", code: "institutional" }]
+                },
+                patient: { reference: "Patient/example" }, // 建議改用 example 或現有 ID
+                created: new Date().toISOString().split('T')[0],
+                provider: { reference: "Practitioner/example" },
+                insurer: { display: "General Insurance Company" }, // 改用 display 避免找不到 ID
+                priority: {
+                    coding: [{ system: "http://terminology.hl7.org/CodeSystem/processpriority", code: "normal" }]
+                },
+                // 記得加入 insurance 欄位，這也是必填
+                insurance: [{
+                    sequence: 1,
+                    focal: true,
+                    coverage: { display: "Self Pay Plan" }
+                }],
+                item: [{
+                    sequence: 1,
+                    productOrService: {
+                        coding: [{ system: "http://www.ama-assn.org/go/cpt", code: "99213" }]
+                    },
+                    unitPrice: { value: 150, currency: "TWD" },
+                    quantity: { value: 1 }
+                }],
+                total: { value: 150, currency: "TWD" }
+            };
+            document.getElementById("output").textContent = JSON.stringify(claim, null, 2);
+            sendToFHIR(claim);
+        }
+
+        function sendToFHIR(claim) {
+            // 直接發送到 HAPI，不使用代理伺服器
+            const fhirUrl = "https://hapi.fhir.org/baseR4/Claim";
+
+            fetch(fhirUrl, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/fhir+json", // FHIR 規範建議的 MIME
+                    "Accept": "application/json"
+                },
+                body: JSON.stringify(claim)
+            })
+                .then(async res => {
+                    const data = await res.json();
+                    if (!res.ok) {
+                        // 顯示 FHIR 伺服器的錯誤訊息 (OperationOutcome)
+                        const errorMsg = data.issue ? data.issue[0].diagnostics : "未知錯誤";
+                        throw new Error(errorMsg);
+                    }
+                    return data;
+                })
+                .then(data => {
+                    console.log("FHIR Response:", data);
+                    alert("✅ 成功送出！Claim ID: " + data.id);
+                })
+                .catch(err => {
+                    console.error("Error Detail:", err);
+                    alert("❌ 錯誤：" + err.message);
+                });
+        }
+
+
+
+
+
+    </script>
+</body>
+</html>
+
